@@ -200,12 +200,12 @@
         </div>
       </div>
 
-      <div id="exif-dropzone" class="dropzone glass-card" role="button" tabindex="0" aria-describedby="exif-drop-help" aria-label="Upload an image: drag and drop or press Enter to browse">
-        <input type="file" id="exif-file-input" class="sr-only" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" tabindex="-1" aria-hidden="true">
+      <div id="exif-dropzone" class="dropzone glass-card" role="button" tabindex="0" aria-describedby="exif-drop-help" aria-label="Choose images: drag and drop or press Enter to browse">
+        <input type="file" id="exif-file-input" class="sr-only" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple tabindex="-1" aria-hidden="true">
         <div class="dropzone-inner">
           <span class="dropzone-icon" aria-hidden="true"><i data-lucide="upload-cloud" class="h-8 w-8"></i></span>
-          <p class="text-base font-semibold text-white">Drop an image here or <span class="text-gradient underline decoration-dotted underline-offset-4">browse</span></p>
-          <p id="exif-drop-help" class="mt-1 text-xs text-zinc-400">PNG, JPG/JPEG or WebP · read with FileReader, never uploaded</p>
+          <p class="text-base font-semibold text-white">Drop images here or <span class="text-gradient underline decoration-dotted underline-offset-4">browse</span></p>
+          <p id="exif-drop-help" class="mt-1 text-xs text-zinc-400">PNG, JPG/JPEG or WebP · processed locally on this device</p>
         </div>
       </div>
 
@@ -276,6 +276,11 @@
           </div>
         </div>
       </div>
+      <section id="exif-batch" class="exif-batch glass-card" aria-labelledby="exif-batch-title" hidden>
+        <h3 id="exif-batch-title" class="section-label">Batch results</h3>
+        <p id="exif-batch-status" class="exif-batch-note" role="status"></p>
+        <ul id="exif-batch-results"></ul>
+      </section>
       <canvas id="exif-canvas" class="hidden" width="1" height="1" aria-hidden="true"></canvas>
     </section>
 

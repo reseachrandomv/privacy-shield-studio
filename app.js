@@ -579,6 +579,8 @@
   const fileInput = $('exif-file-input');
   const exifFormat = $('exif-format');
   const exifQuality = $('exif-quality');
+  const exifBatch = $('exif-batch');
+  const batchResults = $('exif-batch-results');
   const exifState = {
     file: null, bitmap: null, width: 0, height: 0, beforeUrl: '', afterUrl: '',
     cleanBlob: null, report: null, verify: null, encodeToken: 0
@@ -899,36 +901,17 @@
     const token = ++exifState.encodeToken;
     const type = exifFormat.value;
     const quality = Number(exifQuality.value) / 100;
-    const canvas = $('exif-canvas');
     $('exif-processing').hidden = false;
     $('exif-download-btn').disabled = true;
 
-    let blob = null;
-    let dims = null;
-    for (let t = 0; t < CANVAS_TIERS.length && !blob; t += 1) {
-      dims = fitDims(exifState.width, exifState.height, CANVAS_TIERS[t]);
-      try {
-        canvas.width = dims.w;
-        canvas.height = dims.h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('no 2d context');
-        ctx.clearRect(0, 0, dims.w, dims.h);
-        if (type === 'image/jpeg') {
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, dims.w, dims.h);
-        }
-        ctx.drawImage(exifState.bitmap, 0, 0, dims.w, dims.h);
-        blob = await canvasToBlob(canvas, type, type === 'image/png' ? undefined : quality);
-      } catch (err) {
-        blob = null;
-      }
-      if (token !== exifState.encodeToken) return;
-    }
+    const encoded = await encodeBitmap(exifState.bitmap, type, quality, () => token === exifState.encodeToken);
+    if (token !== exifState.encodeToken) return;
     $('exif-processing').hidden = true;
-    if (!blob) {
+    if (!encoded) {
       toast('Your browser could not re-encode this image (it may be too large). Try JPEG, or a smaller image.', 'error', 5000);
       return;
     }
+    const { blob, dims } = encoded;
     exifState.outDims = dims;
     if (dims.scaled && exifState.scaleNoticeFor !== exifState.file) {
       exifState.scaleNoticeFor = exifState.file;
@@ -964,6 +947,33 @@
     store.set('pss.exifQuality', Number(exifQuality.value));
   }
 
+  async function encodeBitmap(bitmap, type, quality, isCurrent = () => true) {
+    const canvas = $('exif-canvas');
+    const width = bitmap.width || bitmap.naturalWidth;
+    const height = bitmap.height || bitmap.naturalHeight;
+    for (const tier of CANVAS_TIERS) {
+      if (!isCurrent()) return null;
+      const dims = fitDims(width, height, tier);
+      try {
+        canvas.width = dims.w;
+        canvas.height = dims.h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('no 2d context');
+        ctx.clearRect(0, 0, dims.w, dims.h);
+        if (type === 'image/jpeg') {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, dims.w, dims.h);
+        }
+        ctx.drawImage(bitmap, 0, 0, dims.w, dims.h);
+        const blob = await canvasToBlob(canvas, type, type === 'image/png' ? undefined : quality);
+        if (blob) return { blob, dims };
+      } catch (err) {
+        // Try the next canvas size when this allocation or encode fails.
+      }
+    }
+    return null;
+  }
+
   const encodeCleanDebounced = debounce(encodeClean, 160);
 
   function resetExif({ silent = false } = {}) {
@@ -975,6 +985,9 @@
     $('exif-preview-before').removeAttribute('src');
     $('exif-preview-after').removeAttribute('src');
     $('exif-workspace').hidden = true;
+    exifBatch.hidden = true;
+    batchResults.replaceChildren();
+    $('exif-batch-status').textContent = '';
     $('exif-processing').hidden = true;
     dropzone.classList.remove('is-compact');
     $('exif-download-btn').disabled = true;
@@ -994,43 +1007,61 @@
   function setExifBusy(busy) {
     dropzone.classList.toggle('is-busy', busy);
     dropzone.setAttribute('aria-busy', String(busy));
+    fileInput.disabled = busy;
     if (busy) $('exif-download-btn').disabled = true;
   }
 
-  async function handleFile(file) {
-    if (!file || dropzone.classList.contains('is-busy')) return;
+  async function handleFiles(files) {
+    if (!files.length || dropzone.classList.contains('is-busy')) return;
     setExifBusy(true);
     try {
-      await loadFile(file);
+      if (files.length === 1) await loadFile(files[0]);
+      else await loadBatch(files);
     } finally {
       setExifBusy(false);
       if (exifState.cleanBlob) $('exif-download-btn').disabled = false;
     }
   }
 
-  async function loadFile(file) {
+  async function readExifImage(file) {
     if (file.size > MAX_IMAGE_BYTES) {
-      toast(`File is too large (${formatBytes(file.size)}). Limit is ${formatBytes(MAX_IMAGE_BYTES)}.`, 'error');
-      return;
+      throw new Error(`File is too large (${formatBytes(file.size)}). Limit is ${formatBytes(MAX_IMAGE_BYTES)}.`);
     }
-    if (file.size > 8 * 1024 * 1024) toast(`Reading ${formatBytes(file.size)} image locally…`, 'info', 2500);
-    let buffer;
+    let report;
     try {
-      buffer = await file.arrayBuffer();
+      report = inspectBytes(await file.arrayBuffer());
     } catch (err) {
-      toast('Could not read that file.', 'error');
-      return;
+      throw new Error('Could not read that file.');
     }
-    const report = inspectBytes(buffer);
     if (!report.mime) {
-      toast(`"${file.name || 'This file'}" is not a PNG, JPG/JPEG or WebP image.`, 'error');
-      return;
+      throw new Error(`"${file.name || 'This file'}" is not a PNG, JPG/JPEG or WebP image.`);
     }
+    try {
+      return { report, bitmap: await decodeImage(file) };
+    } catch (err) {
+      throw new Error('This image could not be decoded by your browser.');
+    }
+  }
+
+  function identifyingMetadata(report) {
+    const found = [];
+    if (report.gps.found) found.push('GPS location');
+    if (report.exif.found) found.push('EXIF');
+    if (report.xmp.found) found.push('XMP');
+    if (report.pngtext.found) found.push('text chunks');
+    return found;
+  }
+
+  async function loadFile(file) {
+    if (file.size > 8 * 1024 * 1024 && file.size <= MAX_IMAGE_BYTES) {
+      toast(`Reading ${formatBytes(file.size)} image locally…`, 'info', 2500);
+    }
+    let report;
     let bitmap;
     try {
-      bitmap = await decodeImage(file);
+      ({ report, bitmap } = await readExifImage(file));
     } catch (err) {
-      toast('This image could not be decoded by your browser.', 'error');
+      toast(err.message, 'error');
       return;
     }
 
@@ -1054,19 +1085,80 @@
     $('exif-reset-btn').disabled = false;
 
     await encodeClean();
-    const found = [];
-    if (report.gps.found) found.push('GPS location');
-    if (report.exif.found) found.push('EXIF');
-    if (report.xmp.found) found.push('XMP');
-    if (report.pngtext.found) found.push('text chunks');
+    const found = identifyingMetadata(report);
     toast(found.length ? `Found ${found.join(', ')}. Removed in the clean copy.` : 'No identifying metadata found. Clean copy ready.', found.length ? 'warning' : 'success', 4200);
   }
 
-  function downloadClean() {
-    const blob = exifState.cleanBlob;
-    if (!blob || !exifState.file) return;
+  async function loadBatch(files) {
+    resetExif({ silent: true });
+    exifBatch.hidden = false;
+    dropzone.classList.add('is-compact');
+    const type = exifFormat.value;
+    const quality = Number(exifQuality.value) / 100;
+    const status = $('exif-batch-status');
+    let ready = 0;
+    for (const [index, file] of files.entries()) {
+      const filename = file.name || 'image';
+      status.textContent = `Processing image ${index + 1} of ${files.length}…`;
+      try {
+        const { bitmap, report } = await readExifImage(file);
+        let encoded;
+        try {
+          encoded = await encodeBitmap(bitmap, type, quality);
+        } finally {
+          bitmap.close?.();
+          const canvas = $('exif-canvas');
+          canvas.width = 1;
+          canvas.height = 1;
+        }
+        if (!encoded) throw new Error('Could not re-encode this image. Try JPEG or a smaller image.');
+        const { blob, dims } = encoded;
+        const verified = inspectBytes(await blob.arrayBuffer());
+        if (!verified.mime || verified.privacyFound) throw new Error('Could not verify a clean copy of this image.');
+
+        const found = identifyingMetadata(report);
+        const notes = [];
+        if (!report.gps.found) notes.push('No GPS found.');
+        if (found.length) notes.push(`Removed ${found.join(', ')}.`);
+        if (dims.scaled) notes.push(`Resized to ${dims.w} × ${dims.h}px.`);
+        if (blob.type !== type) notes.push(`Saved as ${blob.type.split('/')[1].toUpperCase()}.`);
+        addBatchResult(filename, notes.join(' '), blob);
+        ready += 1;
+      } catch (err) {
+        addBatchResult(filename, err.message);
+      }
+    }
+    status.textContent = `${ready} of ${files.length} images ready to download.`;
+    $('exif-reset-btn').disabled = false;
+  }
+
+  function addBatchResult(filename, summary, blob) {
+    const item = document.createElement('li');
+    item.className = 'exif-batch-row';
+    const detail = document.createElement('div');
+    const name = document.createElement('p');
+    name.className = 'exif-batch-name';
+    name.textContent = filename;
+    const note = document.createElement('p');
+    note.className = 'exif-batch-note';
+    note.textContent = summary;
+    detail.append(name, note);
+    item.append(detail);
+    if (blob) {
+      const download = document.createElement('button');
+      download.type = 'button';
+      download.className = 'btn btn-ghost';
+      download.textContent = 'Download';
+      download.setAttribute('aria-label', `Download clean copy of ${filename}`);
+      download.addEventListener('click', () => downloadClean(filename, blob));
+      item.append(download);
+    }
+    batchResults.append(item);
+  }
+
+  function downloadClean(filename, blob) {
     const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[blob.type] || 'png';
-    const base = (exifState.file.name || 'image').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') || 'image';
+    const base = (filename || 'image').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') || 'image';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1097,26 +1189,31 @@
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropzone.classList.remove('is-dragover');
-    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    handleFile(file);
+    handleFiles(Array.from(e.dataTransfer?.files || []));
   });
   window.addEventListener('dragover', (e) => { if (activeTab === 'exif') e.preventDefault(); });
   window.addEventListener('drop', (e) => { if (activeTab === 'exif' && !dropzone.contains(e.target)) e.preventDefault(); });
   fileInput.addEventListener('change', () => {
-    const file = fileInput.files && fileInput.files[0];
-    handleFile(file).finally(() => { fileInput.value = ''; });
+    const files = Array.from(fileInput.files);
+    fileInput.value = '';
+    handleFiles(files);
   });
   document.addEventListener('paste', (e) => {
     if (activeTab !== 'exif' || !e.clipboardData) return;
     const item = Array.from(e.clipboardData.items || []).find((it) => it.kind === 'file' && /^image\/(png|jpeg|webp)$/.test(it.type));
     if (item) {
-      e.preventDefault();
-      handleFile(item.getAsFile());
+      const file = item.getAsFile();
+      if (file) {
+        e.preventDefault();
+        handleFiles([file]);
+      }
     }
   });
   exifFormat.addEventListener('change', () => { syncQualityControl(); encodeClean(); });
   exifQuality.addEventListener('input', () => { syncQualityControl(); encodeCleanDebounced(); });
-  $('exif-download-btn').addEventListener('click', downloadClean);
+  $('exif-download-btn').addEventListener('click', () => {
+    if (exifState.cleanBlob && exifState.file) downloadClean(exifState.file.name, exifState.cleanBlob);
+  });
   $('exif-reset-btn').addEventListener('click', () => resetExif());
 
   (function restoreExifSettings() {

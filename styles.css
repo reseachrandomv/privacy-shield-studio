@@ -629,6 +629,18 @@ mark.leak {
 .status-pill[data-state="ok"] { border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.12); color: var(--emerald-300); }
 
 .segment-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.exif-batch { margin-top: 1.25rem; padding: 1rem; }
+.exif-batch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--glass-border);
+}
+.exif-batch-name { font-size: 0.875rem; font-weight: 600; overflow-wrap: anywhere; }
+.exif-batch-note { font-size: 0.75rem; color: var(--muted); overflow-wrap: anywhere; }
+#exif-batch-status { margin: 0.25rem 0 0.7rem; }
 .segment-item {
   display: flex;
   align-items: center;

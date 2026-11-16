@@ -140,6 +140,8 @@ Rules are applied in this order, so large structures such as key blocks are remo
 
 ### EXIF stripper: what it inspects
 
+Select or drop multiple images to clean them one at a time with your current export settings. Batch results list each file, the identifying metadata removed, and a separate download for each verified clean copy. Select one image for the detailed inspection and export settings.
+
 | Format | Blocks reported |
 |---|---|
 | JPEG | APP1 `Exif` (with GPS IFD, camera make/model, software, capture date), APP1 XMP (incl. extended XMP), APP0 JFIF/JFXX, APP2 ICC profile, APP13 IPTC/Photoshop, other APPn segments, comments |
